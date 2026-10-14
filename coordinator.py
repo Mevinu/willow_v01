@@ -94,8 +94,10 @@ def copy_gguf_metadata(reader: gguf.GGUFReader, writer: gguf.GGUFWriter, arch: s
                     if sub_type == gguf.GGUFValueType.STRING:
                         arr.append(str(bytes(field.parts[idx]), encoding="utf-8", errors="ignore"))
                     else:
-                        arr.append(field.parts[idx][0])
-                writer.add_array(field.name, arr)
+                        arr.append(field.parts[idx][0].item())  # numpy scalar -> Python scalar
+                if arr:
+                    # Preserve the original element type instead of letting gguf infer it
+                    writer.add_key_value(field.name, arr, gguf.GGUFValueType.ARRAY, sub_type=sub_type)
             elif vtype == gguf.GGUFValueType.STRING:
                 val = str(bytes(field.parts[field.data[0]]), encoding="utf-8", errors="ignore")
                 writer.add_string(field.name, val)
@@ -156,7 +158,9 @@ def stream_virtual_gguf_shard(gguf_path: str, start_layer: int, end_layer: int, 
         writer.flush()
 
         tmp_header.seek(0)
-        yield tmp_header.read()
+        header = tmp_header.read()
+        # Tensor data must start on an aligned boundary (GGUFWriter normally pads this in write_tensors_to_file)
+        yield header + b"\x00" * (pad_size(len(header), ALIGNMENT) - len(header))
 
     # Stream raw quantized tensor bytes straight from SSD mmap in 4MB chunks
     CHUNK_SIZE = 4 * 1024 * 1024
@@ -279,7 +283,9 @@ def run_layers(model, hidden_states, position_ids, past_key_values):
     seq_len = hidden_states.shape[1]
     causal_mask = None
     if seq_len > 1:
-        causal_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float16).min, device=hidden_states.device)
+        causal_mask = torch.full(
+            (seq_len, seq_len), torch.finfo(hidden_states.dtype).min, dtype=hidden_states.dtype, device=hidden_states.device
+        )
         causal_mask = torch.triu(causal_mask, diagonal=1).unsqueeze(0).unsqueeze(0)
 
     for layer in model.model.layers:
@@ -287,11 +293,12 @@ def run_layers(model, hidden_states, position_ids, past_key_values):
             hidden_states,
             attention_mask=causal_mask,
             position_ids=position_ids,
-            past_key_value=past_key_values,
+            past_key_values=past_key_values,
             use_cache=True,
             position_embeddings=position_embeddings,
         )
-        hidden_states = layer_outputs[0]
+        # transformers >= 4.54 returns a Tensor; older versions return a tuple
+        hidden_states = layer_outputs[0] if isinstance(layer_outputs, tuple) else layer_outputs
 
     return hidden_states
 
@@ -305,9 +312,16 @@ def load_master_slice(gguf_path: str, end_layer: int, total_layers: int, device:
     if not os.path.exists(shard_path):
         print(f"[*] Creating local Master shard (Layers 0..{end_layer - 1}) in ./.mesh_cache ...")
         keep_head = end_layer == total_layers
-        with open(shard_path, "wb") as f:
-            for chunk in stream_virtual_gguf_shard(gguf_path, 0, end_layer, keep_embd=True, keep_head=keep_head):
-                f.write(chunk)
+        # Write to a temp file and rename on success so a crash never leaves a truncated shard in the cache
+        tmp_path = shard_path + ".part"
+        try:
+            with open(tmp_path, "wb") as f:
+                for chunk in stream_virtual_gguf_shard(gguf_path, 0, end_layer, keep_embd=True, keep_head=keep_head):
+                    f.write(chunk)
+            os.replace(tmp_path, shard_path)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
     folder = os.path.dirname(shard_path)
     filename = os.path.basename(shard_path)

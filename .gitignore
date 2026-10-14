@@ -1,2 +1,4 @@
 .env
 .env/
+.mesh_cache/
+.DS_Store

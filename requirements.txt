@@ -1,9 +1,12 @@
+# Shared by coordinator.py and worker.py
 torch>=2.1
 transformers>=4.45
 accelerate
-gguf>=0.10.0
+gguf>=0.10.0        # coordinator slices GGUF files; transformers needs it to load .gguf shards on both
 numpy
-zeroconf
-psutil
-requests
+zeroconf            # mDNS: coordinator discovers workers, workers advertise themselves
+psutil              # free-RAM reporting / pipeline allocation
 protobuf
+
+# worker.py only
+requests            # downloads its layer shard from the coordinator over HTTP
