@@ -14,7 +14,6 @@ Willow implements a **True Peer-to-Peer Ring Pipeline** combined with **OS Memor
 2. **Dynamic Layer Balancing:** The Coordinator analyzes all connected nodes and calculates an optimal layer allocation matrix ($\text{Layer}_0 \rightarrow \text{Layer}_N$) proportional to each node's available memory and compute power.
 3. **Zero-RAM GGUF Slicing Stream:** The Coordinator opens the monolithic `.gguf` model file on its SSD using `mmap` (taking ~10 MB of RAM). When a worker requests its assigned layers, the Coordinator dynamically synthesizes a valid mini-GGUF header and streams *only* the raw quantized tensor bytes straight from disk over HTTP.
 4. **Local Caching & Instant Boots:** Workers cache their assigned shard slice locally in `./.mesh_cache/`. Subsequent cluster restarts boot in **under 1 second** without re-downloading.
-5. **Low-Latency Tensor Ring:** During generation, nodes pass a tiny 8 KB hidden-state activation vector ($[1, 1, \text{hidden\_dim}]$ FP16) sequentially through a TCP socket ring (`Master -> Worker 1 -> Worker 2 -> Master`).
 
 ---
 

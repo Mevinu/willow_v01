@@ -1,0 +1,9 @@
+torch>=2.1
+transformers>=4.45
+accelerate
+gguf>=0.10.0
+numpy
+zeroconf
+psutil
+requests
+protobuf
